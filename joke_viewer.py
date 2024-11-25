@@ -12,34 +12,48 @@ class JokeManager:
         self.jokes_file = jokes_file
         try:
             with open(jokes_file, 'r', encoding='utf-8') as f:
-                raw_jokes = json.load(f)
-                # Check if jokes are in the new format or need conversion
-                self.jokes = {}
-                for number, content in raw_jokes.items():
-                    if isinstance(content, str):
-                        # Convert from old format
-                        self.jokes[number] = {
-                            "original": content,
-                            "versions": [],
-                            "status": "pending"
-                        }
-                    else:
-                        # Already in new format
-                        self.jokes[number] = content
+                data = json.load(f)
+                # Check if data is in new format (with metadata)
+                if isinstance(data, dict) and "metadata" in data:
+                    self.metadata = data["metadata"]
+                    self.jokes = data["jokes"]
+                else:
+                    # Convert old format
+                    self.metadata = {
+                        "prompt_template": create_translation_prompt("{{joke_text}}")
+                    }
+                    self.jokes = data
         except FileNotFoundError:
             self.jokes = {}
-            
+            self.metadata = {
+                "prompt_template": create_translation_prompt("{{joke_text}}")
+            }
+    
     def save_jokes(self):
+        """Save both jokes and metadata"""
         with open(self.jokes_file, 'w', encoding='utf-8') as f:
-            json.dump(self.jokes, f, ensure_ascii=False, indent=2)
-            
+            json.dump({
+                "metadata": self.metadata,
+                "jokes": self.jokes
+            }, f, ensure_ascii=False, indent=2)
+    
+    def update_prompt_template(self, new_template: str):
+        """Update the prompt template"""
+        self.metadata["prompt_template"] = new_template
+        self.save_jokes()
+    
+    def get_prompt_template(self) -> str:
+        """Get current prompt template"""
+        return self.metadata.get("prompt_template", create_translation_prompt("{{joke_text}}"))
+    
     def get_joke_versions(self, number: str) -> Dict:
         """Get all versions of a specific joke"""
         if number not in self.jokes:
             self.jokes[number] = {
                 "original": "",
                 "versions": [],
-                "status": "pending"
+                "status": "pending",
+                "rating": 0
             }
         return self.jokes[number]
     
@@ -80,6 +94,65 @@ class JokeManager:
             self.save_jokes()
             return True
         return False
+    
+    def restore_joke(self, number: str):
+        """Restore a deleted joke"""
+        if number in self.jokes and self.jokes[number]["status"] == "deleted":
+            self.jokes[number]["status"] = "pending"
+            self.save_jokes()
+            return True
+        return False
+    
+    def get_deleted_jokes(self) -> List[tuple[str, Dict]]:
+        """Get all deleted jokes"""
+        return [(num, joke) for num, joke in self.jokes.items() 
+                if joke.get("status") == "deleted"]
+    
+    def update_rating(self, number: str, is_like: bool):
+        """Update joke rating (like +1, dislike -1)"""
+        if number in self.jokes:
+            self.jokes[number]["rating"] = self.jokes[number].get("rating", 0)
+            if is_like:
+                self.jokes[number]["rating"] += 1
+            else:
+                self.jokes[number]["rating"] -= 1
+            self.save_jokes()
+            return True
+        return False
+    
+    def get_top_jokes(self, limit: int = 10) -> List[tuple[str, Dict]]:
+        """Get top rated jokes"""
+        sorted_jokes = sorted(
+            [(num, joke) for num, joke in self.jokes.items()],
+            key=lambda x: x[1].get("rating", 0),
+            reverse=True
+        )
+        return sorted_jokes[:limit]
+    
+    def add_tag(self, number: str, tag: str):
+        """Add a tag to a joke"""
+        if number in self.jokes:
+            if tag not in self.jokes[number]["tags"]:
+                self.jokes[number]["tags"].append(tag)
+                self.save_jokes()
+                return True
+        return False
+    
+    def remove_tag(self, number: str, tag: str):
+        """Remove a tag from a joke"""
+        if number in self.jokes:
+            if tag in self.jokes[number]["tags"]:
+                self.jokes[number]["tags"].remove(tag)
+                self.save_jokes()
+                return True
+        return False
+    
+    def get_all_tags(self) -> List[str]:
+        """Get all unique tags used in jokes"""
+        tags = set()
+        for joke in self.jokes.values():
+            tags.update(joke.get("tags", []))
+        return sorted(list(tags))
 
 def load_config():
     """Load configuration from .streamlit/secrets.toml"""
@@ -124,16 +197,71 @@ def create_translation_prompt(joke_text: str) -> str:
 
 def display_joke_side_by_side(joke_data, number, manager):
     """Display joke with original and translation side by side"""
-    # Add action buttons above the joke
-    col_edit, col_delete = st.columns(2)
+    # Add CSS for buttons
+    st.markdown("""
+        <style>
+            .stButton button {
+                width: 100%;
+                border-radius: 5px;
+                margin: 2px;
+            }
+            .delete-button button {
+                background-color: #ff4b4b;
+                color: white;
+            }
+            .delete-button button:hover {
+                background-color: #cc3333;
+            }
+            .edit-button button {
+                background-color: #0096c7;
+                color: white;
+            }
+            .edit-button button:hover {
+                background-color: #0077b6;
+            }
+            .like-button button {
+                background-color: #28a745;
+                color: white;
+            }
+            .dislike-button button {
+                background-color: #dc3545;
+                color: white;
+            }
+        </style>
+    """, unsafe_allow_html=True)
+    
+    # All buttons in one row
+    col_rating_display, col_like, col_dislike, col_edit, col_delete = st.columns([2, 1, 1, 2, 2])
+    
+    with col_rating_display:
+        rating = joke_data.get("rating", 0)
+        st.write(f"👥 דירוג: {rating}")
+    
+    with col_like:
+        st.markdown('<div class="like-button">', unsafe_allow_html=True)
+        if st.button("👍", key=f"like_{number}"):
+            manager.update_rating(number, True)
+            st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    with col_dislike:
+        st.markdown('<div class="dislike-button">', unsafe_allow_html=True)
+        if st.button("👎", key=f"dislike_{number}"):
+            manager.update_rating(number, False)
+            st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
     
     with col_edit:
-        if st.button("ערוך", key=f"edit_{number}"):
-            st.session_state[f"editing_{number}"] = True
+        if joke_data.get("status") != "deleted":
+            st.markdown('<div class="edit-button">', unsafe_allow_html=True)
+            if st.button("✏️", key=f"edit_{number}"):
+                st.session_state[f"editing_{number}"] = True
+            st.markdown('</div>', unsafe_allow_html=True)
     
     with col_delete:
         if joke_data.get("status") != "deleted":
-            if st.button("מחק", key=f"delete_{number}"):
+            st.markdown('<div class="delete-button">', unsafe_allow_html=True)
+            if st.button("🗑️", key=f"delete_{number}"):
                 if st.session_state.get(f"confirm_delete_{number}", False):
                     manager.mark_as_deleted(number)
                     st.success("הבדיחה סומנה כמחוקה")
@@ -141,28 +269,54 @@ def display_joke_side_by_side(joke_data, number, manager):
                 else:
                     st.session_state[f"confirm_delete_{number}"] = True
                     st.warning("לחץ שוב למחיקה")
-        else:
-            st.info("בדיחה מחוקה")
+            st.markdown('</div>', unsafe_allow_html=True)
+        elif joke_data.get("status") == "deleted":
+            st.warning("בדיחה מחוקה", icon="🗑️")
     
     # Show edit form if editing
     if st.session_state.get(f"editing_{number}", False):
         with st.form(key=f"edit_form_{number}"):
-            edited_text = st.text_area("ערוך את הבדיחה:", value=joke_data["original"])
+            edited_text = st.text_area("ערוך ת הבדיחה:", value=joke_data["original"])
             edit_type = st.text_input("סוג העריכה:", value="edited")
             
             col1, col2 = st.columns(2)
             with col1:
-                if st.form_submit_button("שמור"):
+                if st.form_submit_button("💾 שמור"):
                     manager.edit_joke(number, edited_text, edit_type)
                     st.session_state[f"editing_{number}"] = False
                     st.success("העריכה נשמרה")
                     st.rerun()
             with col2:
-                if st.form_submit_button("בטל"):
+                if st.form_submit_button("❌ בטל"):
                     st.session_state[f"editing_{number}"] = False
                     st.rerun()
     
+    # Add tags section after buttons
+    st.markdown("---")
+    
+    # Tags section
+    col_tags, col_add = st.columns([4, 1])
+    with col_tags:
+        if joke_data.get("tags"):
+            for tag in joke_data["tags"]:
+                col1, col2 = st.columns([4, 1])
+                with col1:
+                    st.markdown(f"🏷️ {tag}")
+                with col2:
+                    if st.button("❌", key=f"remove_tag_{number}_{tag}"):
+                        manager.remove_tag(number, tag)
+                        st.rerun()
+    
+    # Add new tag
+    with col_add:
+        new_tag = st.text_input("הוסף תגית:", key=f"new_tag_{number}")
+        if new_tag:
+            if st.button("הוסף", key=f"add_tag_{number}"):
+                manager.add_tag(number, new_tag)
+                st.rerun()
+    
     # Display joke content
+    st.markdown("---")  # Separator line
     col1, col2 = st.columns(2)
     
     with col1:
@@ -173,24 +327,44 @@ def display_joke_side_by_side(joke_data, number, manager):
             st.write(joke_data["original"])
     
     with col2:
-        st.markdown("**תרגום**")
         if joke_data.get("versions"):
-            if len(joke_data["versions"]) > 1:
-                version_index = st.selectbox(
-                    "בחר גרסה:",
-                    range(len(joke_data["versions"])),
-                    format_func=lambda i: f'גרסה {i+1} - {joke_data["versions"][i]["type"]} ({joke_data["versions"][i]["timestamp"]})'
-                )
-                selected_version = joke_data["versions"][version_index]
-            else:
-                selected_version = joke_data["versions"][0]
+            versions = joke_data["versions"]
             
+            # Version navigation
+            col_prev, col_curr, col_next = st.columns([1, 3, 1])
+            
+            # Get current version index from session state
+            if f"version_idx_{number}" not in st.session_state:
+                st.session_state[f"version_idx_{number}"] = 0
+            
+            curr_idx = st.session_state[f"version_idx_{number}"]
+            
+            # Previous version button
+            with col_prev:
+                if curr_idx > 0:
+                    if st.button("⬅️", key=f"prev_{number}"):
+                        st.session_state[f"version_idx_{number}"] -= 1
+                        st.rerun()
+            
+            # Current version info
+            with col_curr:
+                st.markdown(f"**גרסת עריכה {curr_idx + 1} מתוך {len(versions)}**")
+            
+            # Next version button
+            with col_next:
+                if curr_idx < len(versions) - 1:
+                    if st.button("➡️", key=f"next_{number}"):
+                        st.session_state[f"version_idx_{number}"] += 1
+                        st.rerun()
+            
+            # Display current version
             if joke_data.get("status") == "deleted":
-                st.markdown("~~" + selected_version["text"] + "~~")
+                st.markdown("~~" + versions[curr_idx]["text"] + "~~")
             else:
-                st.write(selected_version["text"])
+                st.write(versions[curr_idx]["text"])
+                st.caption(f'{versions[curr_idx]["type"]} • {versions[curr_idx]["timestamp"]}')
         else:
-            st.info("טרם נוצר תרגום")
+            st.info("טרם נוצר ��רגום")
 
 def main():
     st.set_page_config(page_title="מאגר הבדיחות", layout="wide")
@@ -217,32 +391,49 @@ def main():
     st.sidebar.title("אפשרויות")
     mode = st.sidebar.radio(
         "בחר פעולה",
-        ["חיפוש בדיחות", "בדיחה לפי מספר", "רשימת בדיחות", "ניהול תרגומים"]
+        ["חיפוש בדיחות", "בדיחה לפי מספר", "רשימת בדיחות", 
+         "בדיחות מובילות", "ניהול תרגומים", "סל מחזור"]  # Reordered options
     )
     
     if mode == "חיפוש בדיחות":
         st.header("חיפוש בדיחות")
         query = st.text_input("הכנס מילות חיפוש:")
         
-        if query:
-            # Search in both original and translated versions
+        # Add tag filter
+        all_tags = manager.get_all_tags()
+        selected_tags = st.multiselect("סנן לפי תגיות:", all_tags)
+        
+        if query or selected_tags:
             results = []
             for number, joke_data in manager.jokes.items():
-                # Search in original
-                if query.lower() in joke_data["original"].lower():
-                    results.append((number, joke_data))
+                # Skip deleted jokes
+                if joke_data.get("status") == "deleted":
                     continue
                     
-                # Search in versions
-                for version in joke_data["versions"]:
-                    if query.lower() in version["text"].lower():
+                # Check tags first
+                if selected_tags and not any(tag in joke_data.get("tags", []) for tag in selected_tags):
+                    continue
+                
+                # Then check text if query exists
+                if query:
+                    if query.lower() in joke_data["original"].lower():
                         results.append((number, joke_data))
-                        break
+                        continue
+                        
+                    for version in joke_data.get("versions", []):
+                        if query.lower() in version["text"].lower():
+                            results.append((number, joke_data))
+                            break
+                else:
+                    results.append((number, joke_data))
             
             if results:
+                # Sort by rating
+                results.sort(key=lambda x: x[1].get("rating", 0), reverse=True)
+                
                 st.write(f"נמצאו {len(results)} תוצאות:")
                 for num, joke_data in results:
-                    with st.expander(f"בדיחה מספר {num}"):
+                    with st.expander(f"בדיחה מספר {num} (דירוג: {joke_data.get('rating', 0)})"):
                         display_joke_side_by_side(joke_data, num, manager)
             else:
                 st.warning("לא נמצאו תוצאות")
@@ -251,17 +442,26 @@ def main():
         st.header("ניהול תרגומים")
         
         # Translation settings
-        with st.expander("הגדרות תרגום"):
+        with st.expander("הגדרות תרגום", expanded=True):
             model = create_gemini_model()
             if not model:
                 st.error("לא נמצא API key של Gemini ב-secrets.toml")
                 return
-                
-            prompt_template = st.text_area(
-                "תבנית פרומפט:",
-                create_translation_prompt("{{joke_text}}"),
-                height=300
-            )
+            
+            # Prompt template with save button
+            col1, col2 = st.columns([4, 1])
+            with col1:
+                prompt_template = st.text_area(
+                    "תבנית פרומפט:",
+                    value=manager.get_prompt_template(),
+                    height=300,
+                    key="prompt_template"
+                )
+            with col2:
+                if st.button("💾 שמור תבנית"):
+                    manager.update_prompt_template(prompt_template)
+                    st.success("התבנית נשמרה!")
+            
             batch_size = st.number_input("כמות בדיחות לתרגום בבת אחת:", min_value=1, value=5)
         
         # Batch translation
@@ -281,7 +481,8 @@ def main():
                 status_text.text(f"מתרגם בדיחה {joke_number}...")
                 
                 try:
-                    prompt = prompt_template.replace("{{joke_text}}", joke["original"])
+                    # Use saved prompt template
+                    prompt = manager.get_prompt_template().replace("{{joke_text}}", joke["original"])
                     response = chat.send_message(prompt)
                     
                     translation = response.text
@@ -332,6 +533,10 @@ def main():
         # Filter jokes based on status
         filtered_jokes = []
         for number, joke in manager.jokes.items():
+            # Skip deleted jokes
+            if joke.get("status") == "deleted":
+                continue
+                
             if filter_status == "הכל" or \
                (filter_status == "ממתין לתרגום" and joke.get("status") == "pending") or \
                (filter_status == "תורגם" and joke.get("status") == "completed"):
@@ -353,6 +558,62 @@ def main():
         # Display jokes
         for number, joke in filtered_jokes[start_idx:end_idx]:
             with st.expander(f"בדיחה מספר {number} - {joke.get('status', 'pending')}"):
+                display_joke_side_by_side(joke, number, manager)
+    
+    elif mode == "סל מחזור":
+        st.header("סל מחזור")
+        
+        deleted_jokes = manager.get_deleted_jokes()
+        if not deleted_jokes:
+            st.info("אין בדיחות מחוקות")
+            return
+            
+        st.write(f"נמצאו {len(deleted_jokes)} בדיחות מחוקות:")
+        
+        # Group restore button
+        if st.button("שחזר את כל הבדיחות"):
+            restored_count = 0
+            for number, _ in deleted_jokes:
+                if manager.restore_joke(number):
+                    restored_count += 1
+            st.success(f"שוחזרו {restored_count} בדיחות")
+            st.rerun()
+        
+        # Display deleted jokes
+        for number, joke in deleted_jokes:
+            with st.expander(f"בדיחה מספר {number}"):
+                col1, col2, col3 = st.columns([6, 6, 1])
+                
+                with col1:
+                    st.markdown("**גרסה מקורית**")
+                    st.markdown("~~" + joke["original"] + "~~")
+                
+                with col2:
+                    if joke.get("versions"):
+                        st.markdown("**תרגום אחרון**")
+                        last_version = joke["versions"][-1]
+                        st.markdown("~~" + last_version["text"] + "~~")
+                
+                with col3:
+                    if st.button("שחזר", key=f"restore_{number}"):
+                        if manager.restore_joke(number):
+                            st.success("הבדיחה שוחזרה")
+                            st.rerun()
+    
+    elif mode == "בדיחות מובילות":
+        st.header("בדיחות מובילות")
+        
+        # Get top jokes excluding deleted ones
+        top_jokes = [(num, joke) for num, joke in manager.get_top_jokes(10) 
+                    if joke.get("status") != "deleted"]
+        
+        if not top_jokes:
+            st.info("אין עדיין בדיחות מדורגות")
+            return
+        
+        # Display top jokes
+        for i, (number, joke) in enumerate(top_jokes, 1):
+            with st.expander(f"#{i} - בדיחה מספר {number} (דירוג: {joke.get('rating', 0)})"):
                 display_joke_side_by_side(joke, number, manager)
     
     # ... (rest of the existing view modes remain the same)
