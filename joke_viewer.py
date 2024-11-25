@@ -60,6 +60,26 @@ class JokeManager:
         """Get a batch of jokes that need translation"""
         return [num for num, joke in self.jokes.items() 
                 if joke.get("status", "pending") == "pending"][:batch_size]
+    
+    def mark_as_deleted(self, number: str):
+        """Mark a joke as deleted without actually removing it"""
+        if number in self.jokes:
+            self.jokes[number]["status"] = "deleted"
+            self.save_jokes()
+            return True
+        return False
+    
+    def edit_joke(self, number: str, new_text: str, edit_type: str = "edited"):
+        """Add edited version of a joke"""
+        if number in self.jokes:
+            self.jokes[number]["versions"].append({
+                "text": new_text,
+                "type": edit_type,
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+            })
+            self.save_jokes()
+            return True
+        return False
 
 def load_config():
     """Load configuration from .streamlit/secrets.toml"""
@@ -102,29 +122,73 @@ def create_translation_prompt(joke_text: str) -> str:
 
 התרגום:"""
 
-def display_joke_side_by_side(joke_data, number):
+def display_joke_side_by_side(joke_data, number, manager):
     """Display joke with original and translation side by side"""
+    # Add action buttons above the joke
+    col_edit, col_delete = st.columns(2)
+    
+    with col_edit:
+        if st.button("ערוך", key=f"edit_{number}"):
+            st.session_state[f"editing_{number}"] = True
+    
+    with col_delete:
+        if joke_data.get("status") != "deleted":
+            if st.button("מחק", key=f"delete_{number}"):
+                if st.session_state.get(f"confirm_delete_{number}", False):
+                    manager.mark_as_deleted(number)
+                    st.success("הבדיחה סומנה כמחוקה")
+                    st.rerun()
+                else:
+                    st.session_state[f"confirm_delete_{number}"] = True
+                    st.warning("לחץ שוב למחיקה")
+        else:
+            st.info("בדיחה מחוקה")
+    
+    # Show edit form if editing
+    if st.session_state.get(f"editing_{number}", False):
+        with st.form(key=f"edit_form_{number}"):
+            edited_text = st.text_area("ערוך את הבדיחה:", value=joke_data["original"])
+            edit_type = st.text_input("סוג העריכה:", value="edited")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.form_submit_button("שמור"):
+                    manager.edit_joke(number, edited_text, edit_type)
+                    st.session_state[f"editing_{number}"] = False
+                    st.success("העריכה נשמרה")
+                    st.rerun()
+            with col2:
+                if st.form_submit_button("בטל"):
+                    st.session_state[f"editing_{number}"] = False
+                    st.rerun()
+    
+    # Display joke content
     col1, col2 = st.columns(2)
     
     with col1:
         st.markdown("**גרסה מקורית**")
-        st.write(joke_data["original"])
+        if joke_data.get("status") == "deleted":
+            st.markdown("~~" + joke_data["original"] + "~~")
+        else:
+            st.write(joke_data["original"])
     
     with col2:
         st.markdown("**תרגום**")
-        if joke_data.get("versions"):  # Check if versions exist and not empty
-            # Add version selector if there are multiple versions
+        if joke_data.get("versions"):
             if len(joke_data["versions"]) > 1:
                 version_index = st.selectbox(
                     "בחר גרסה:",
                     range(len(joke_data["versions"])),
-                    format_func=lambda i: f'גרסה {i+1} ({joke_data["versions"][i]["timestamp"]})'
+                    format_func=lambda i: f'גרסה {i+1} - {joke_data["versions"][i]["type"]} ({joke_data["versions"][i]["timestamp"]})'
                 )
                 selected_version = joke_data["versions"][version_index]
             else:
                 selected_version = joke_data["versions"][0]
             
-            st.write(selected_version["text"])
+            if joke_data.get("status") == "deleted":
+                st.markdown("~~" + selected_version["text"] + "~~")
+            else:
+                st.write(selected_version["text"])
         else:
             st.info("טרם נוצר תרגום")
 
@@ -179,7 +243,7 @@ def main():
                 st.write(f"נמצאו {len(results)} תוצאות:")
                 for num, joke_data in results:
                     with st.expander(f"בדיחה מספר {num}"):
-                        display_joke_side_by_side(joke_data, num)
+                        display_joke_side_by_side(joke_data, num, manager)
             else:
                 st.warning("לא נמצאו תוצאות")
     
@@ -240,7 +304,7 @@ def main():
             joke = manager.get_joke_versions(joke_number)
             if joke:
                 st.subheader(f"בדיחה מספר {joke_number}")
-                display_joke_side_by_side(joke, joke_number)
+                display_joke_side_by_side(joke, joke_number, manager)
                 
                 # Add new version manually
                 with st.expander("הוסף גרסה חדשה"):
@@ -289,7 +353,7 @@ def main():
         # Display jokes
         for number, joke in filtered_jokes[start_idx:end_idx]:
             with st.expander(f"בדיחה מספר {number} - {joke.get('status', 'pending')}"):
-                display_joke_side_by_side(joke, number)
+                display_joke_side_by_side(joke, number, manager)
     
     # ... (rest of the existing view modes remain the same)
 
