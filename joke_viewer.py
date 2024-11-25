@@ -233,24 +233,25 @@ def display_joke_side_by_side(joke_data, number, manager):
     # All buttons in one row
     col_rating_display, col_like, col_dislike, col_edit, col_delete = st.columns([2, 1, 1, 2, 2])
     
+    # Get current rating from session state or initialize it
+    if f"rating_{number}" not in st.session_state:
+        st.session_state[f"rating_{number}"] = joke_data.get("rating", 0)
+    
     with col_rating_display:
-        rating = joke_data.get("rating", 0)
-        st.write(f"👥 דירוג: {rating}")
+        st.write(f"👥 דירוג: {st.session_state[f'rating_{number}']}")
     
     with col_like:
         st.markdown('<div class="like-button">', unsafe_allow_html=True)
         if st.button("👍", key=f"like_{number}"):
             manager.update_rating(number, True)
-            rating = joke_data.get("rating", 0) + 1
-            st.write(f"👥 דירוג: {rating}")
+            st.session_state[f"rating_{number}"] += 1
         st.markdown('</div>', unsafe_allow_html=True)
     
     with col_dislike:
         st.markdown('<div class="dislike-button">', unsafe_allow_html=True)
         if st.button("👎", key=f"dislike_{number}"):
             manager.update_rating(number, False)
-            rating = joke_data.get("rating", 0) - 1
-            st.write(f"👥 דירוג: {rating}")
+            st.session_state[f"rating_{number}"] -= 1
         st.markdown('</div>', unsafe_allow_html=True)
     
     with col_edit:
@@ -441,7 +442,7 @@ def main():
                 st.warning("לא נמצאו תוצאות")
     
     elif mode == "ניהול תרגומים":
-        st.header("ניהול תרגומים")
+        st.header("��יהול תרגומים")
         
         # Translation settings
         with st.expander("הגדרות תרגום", expanded=True):
