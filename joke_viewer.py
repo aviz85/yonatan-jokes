@@ -241,14 +241,16 @@ def display_joke_side_by_side(joke_data, number, manager):
         st.markdown('<div class="like-button">', unsafe_allow_html=True)
         if st.button("👍", key=f"like_{number}"):
             manager.update_rating(number, True)
-            st.rerun()
+            rating = joke_data.get("rating", 0) + 1
+            st.write(f"👥 דירוג: {rating}")
         st.markdown('</div>', unsafe_allow_html=True)
     
     with col_dislike:
         st.markdown('<div class="dislike-button">', unsafe_allow_html=True)
         if st.button("👎", key=f"dislike_{number}"):
             manager.update_rating(number, False)
-            st.rerun()
+            rating = joke_data.get("rating", 0) - 1
+            st.write(f"👥 דירוג: {rating}")
         st.markdown('</div>', unsafe_allow_html=True)
     
     with col_edit:
@@ -364,7 +366,7 @@ def display_joke_side_by_side(joke_data, number, manager):
                 st.write(versions[curr_idx]["text"])
                 st.caption(f'{versions[curr_idx]["type"]} • {versions[curr_idx]["timestamp"]}')
         else:
-            st.info("טרם נוצר ��רגום")
+            st.info("טרם נוצר רגום")
 
 def main():
     st.set_page_config(page_title="מאגר הבדיחות", layout="wide")
@@ -557,7 +559,14 @@ def main():
         
         # Display jokes
         for number, joke in filtered_jokes[start_idx:end_idx]:
-            with st.expander(f"בדיחה מספר {number} - {joke.get('status', 'pending')}"):
+            # Keep track of expander state in session state
+            if f"expander_{number}" not in st.session_state:
+                st.session_state[f"expander_{number}"] = True
+            
+            with st.expander(
+                f"בדיחה מספר {number} - {joke.get('status', 'pending')}", 
+                expanded=st.session_state[f"expander_{number}"]
+            ):
                 display_joke_side_by_side(joke, number, manager)
     
     elif mode == "סל מחזור":
