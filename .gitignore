@@ -33,5 +33,4 @@ venv/
 .DS_Store
 
 # Project specific
-jokes.json
 *.log 
